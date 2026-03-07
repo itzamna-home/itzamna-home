@@ -63,8 +63,8 @@ curl -X POST http://127.0.0.1:8099/rhasspy \
 
 ### Home Assistant UI
 
-- URL local: `http://127.0.0.1:8124`
-- URL LAN: `http://<host>:8124`
+- URL local: `http://127.0.0.1:8123`
+- URL LAN: `http://<host>:8123`
 - Config persistente: `homeassistant/config`
 
 Primera vez: completa el onboarding web y crea usuario admin.
