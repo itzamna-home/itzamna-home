@@ -185,6 +185,14 @@ Notas:
   - `AUDIO_SOURCE=mic_bus.monitor`
   - `SECONDS_REC=6`
 
+## TTS en español (Telegram)
+
+Para evitar voz en inglés hablando español, usa voz `es-MX-DaliaNeural` con este script:
+
+```bash
+bash scripts/telegram_tts_esmx.sh "Hola, esta es una prueba en español de México"
+```
+
 ## Documentación
 
 - Bitácora de cambios y decisiones: `docs/operations-log-2026-03-07.md`
