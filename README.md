@@ -66,6 +66,7 @@ curl -X POST http://127.0.0.1:8099/rhasspy \
 - URL local: `http://127.0.0.1:8123`
 - URL LAN: `http://<host>:8123`
 - Config persistente: `homeassistant/config`
+- Red recomendada para autodiscovery (Hue/mDNS): `network_mode: host`
 
 Primera vez: completa el onboarding web y crea usuario admin.
 
