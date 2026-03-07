@@ -72,13 +72,54 @@ docker compose --profile local-ollama up -d ollama
 bash scripts/voicecmd.sh
 ```
 
-Hace todo en una sola ejecución:
+Hace todo en una sola ejecución (modo precisión):
 
 1. activa wake (`hola`)
-2. escucha por micrófono con Rhasspy
-3. envía el texto a OpenClaw/Ollama bridge
+2. graba micrófono local
+3. transcribe con **faster-whisper** en español
+4. envía el texto a OpenClaw/Ollama bridge
 
-Requisito: `jq` instalado en host.
+Requisitos en host:
+
+- `jq`
+- Python 3 + `faster-whisper`
+
+Instalación:
+
+```bash
+pip3 install --user --break-system-packages faster-whisper
+```
+
+### Rhasspy con STT Whisper remoto (recomendado)
+
+1. Levanta servidor STT Whisper en host:
+
+```bash
+nohup python3 ~/.openclaw/workspace/rhasspy/whisper_stt_server.py > ~/.openclaw/workspace/rhasspy/whisper-stt.log 2>&1 &
+```
+
+2. Configura Rhasspy para usar STT remoto:
+
+```json
+"speech_to_text": {
+  "system": "remote",
+  "remote": { "url": "http://172.17.0.1:8100/api/speech-to-text" }
+}
+```
+
+3. Reinicia Rhasspy:
+
+```bash
+docker restart rhasspy
+```
+
+Notas:
+
+- En la primera ejecución, Whisper descargará el modelo (puede tardar).
+- Puedes ajustar variables:
+  - `WHISPER_MODEL=small|medium`
+  - `MIC_DEVICE=plughw:0,0`
+  - `SECONDS_REC=6`
 
 ## Documentación
 
