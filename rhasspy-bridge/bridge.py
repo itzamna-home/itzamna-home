@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from flask import Flask, request, jsonify
 import os
 import subprocess
@@ -6,6 +7,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# ---- Config (override with env vars in docker-compose) ----
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "776654658")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.100.64:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
@@ -42,22 +44,37 @@ def ask_llm(user_text: str) -> str:
     return reply or "Listo."
 
 
-@app.get("/health")
+@app.get('/health')
 def health():
     return {
         "ok": True,
         "service": "rhasspy-openclaw-bridge",
         "time": datetime.utcnow().isoformat() + "Z",
         "ollama_model": OLLAMA_MODEL,
+        "fallback_model": FALLBACK_MODEL,
     }
 
 
-@app.post("/rhasspy")
+@app.post('/rhasspy')
 def rhasspy_in():
     data = request.get_json(silent=True) or {}
-    text = (data.get("text") or data.get("input") or data.get("utterance") or "").strip()
+
+    # Accept multiple Rhasspy payload styles
+    text = (
+        data.get('text')
+        or data.get('input')
+        or data.get('utterance')
+        or data.get('raw_text')
+        or ((data.get('slots') or {}).get('text') if isinstance(data.get('slots'), dict) else None)
+        or ''
+    ).strip()
+
+    # Some payloads carry fallback text in intent metadata
+    if not text and isinstance(data.get('intent'), dict):
+        text = (data['intent'].get('name') or '').strip()
+
     if not text:
-        return jsonify({"ok": False, "error": "No text in payload"}), 400
+        return jsonify({"ok": False, "error": "No text in payload", "payload": data}), 400
 
     try:
         answer = ask_llm(text)
@@ -66,31 +83,24 @@ def rhasspy_in():
 
     msg = f"🎙️ Rhasspy: {text}\n🤖 {answer}"
     cmd = [
-        "openclaw",
-        "message",
-        "send",
-        "--channel",
-        "telegram",
-        "--target",
-        TELEGRAM_CHAT_ID,
-        "--message",
-        msg,
+        "openclaw", "message", "send",
+        "--channel", "telegram",
+        "--target", TELEGRAM_CHAT_ID,
+        "--message", msg,
         "--json",
     ]
     code, out, err = run_cmd(cmd)
 
-    return jsonify(
-        {
-            "ok": True,
-            "heard": text,
-            "reply": answer,
-            "speech": {"text": answer},
-            "telegramForwarded": code == 0,
-            "stdout": out,
-            "stderr": err,
-        }
-    )
+    return jsonify({
+        "ok": True,
+        "heard": text,
+        "reply": answer,
+        "speech": {"text": answer},
+        "telegramForwarded": code == 0,
+        "stdout": out,
+        "stderr": err,
+    })
 
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8099)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8099)
