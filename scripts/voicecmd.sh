@@ -13,7 +13,8 @@ SECONDS_REC="${SECONDS_REC:-6}"
 WHISPER_MODEL="${WHISPER_MODEL:-medium}"
 TMP_WAV="/tmp/voicecmd.wav"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LISTEN_URL="http://127.0.0.1:12101/api/listen-for-command?timeout=${SECONDS_REC}"
+LISTEN_TIMEOUT="${LISTEN_TIMEOUT:-10}"
+LISTEN_URL="http://127.0.0.1:12101/api/listen-for-command?timeout=${LISTEN_TIMEOUT}"
 
 curl -sS -X POST "$BRIDGE_URL" \
   -H "Content-Type: application/json" \
@@ -27,10 +28,16 @@ if arecord -D "$MIC_DEVICE" -f S16_LE -c 1 -r 16000 -d "$SECONDS_REC" "$TMP_WAV"
   echo "📝 Detectado (Whisper): $CMD"
 else
   echo "⚠️ Mic ocupado/no disponible; usando captura de Rhasspy..."
-  RESP=$(curl -sS -X POST "$LISTEN_URL")
+  RESP=$(curl -sS -X POST "$LISTEN_URL" || true)
   echo "📦 Rhasspy: $RESP"
-  CMD=$(echo "$RESP" | jq -r '.raw_text // .text // empty')
-  echo "📝 Detectado (Rhasspy): $CMD"
+
+  if [[ "$RESP" == \{*\} ]]; then
+    CMD=$(echo "$RESP" | jq -r '.raw_text // .text // empty')
+    echo "📝 Detectado (Rhasspy): $CMD"
+  else
+    echo "❌ Rhasspy no devolvió JSON (probable timeout). Intenta hablar más cerca del mic o aumenta timeout." >&2
+    exit 1
+  fi
 fi
 
 if [[ -z "$CMD" ]]; then

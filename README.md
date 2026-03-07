@@ -124,6 +124,7 @@ Notas:
   - `WHISPER_MODEL=small|medium`
   - `MIC_DEVICE=plughw:0,0`
   - `SECONDS_REC=6`
+  - `LISTEN_TIMEOUT=10` (cuando usa fallback Rhasspy)
 
 ## Documentación
 
