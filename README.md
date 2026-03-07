@@ -66,6 +66,20 @@ Opcional (si quieres Ollama local en este mismo host):
 docker compose --profile local-ollama up -d ollama
 ```
 
+## Comando único de voz (copy/paste)
+
+```bash
+bash scripts/voicecmd.sh
+```
+
+Hace todo en una sola ejecución:
+
+1. activa wake (`hola`)
+2. escucha por micrófono con Rhasspy
+3. envía el texto a OpenClaw/Ollama bridge
+
+Requisito: `jq` instalado en host.
+
 ## Documentación
 
 - Bitácora de cambios y decisiones: `docs/operations-log-2026-03-07.md`
