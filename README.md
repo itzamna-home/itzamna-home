@@ -27,6 +27,39 @@ Infra y documentación operativa de Itzamna Home.
 docker compose up -d rhasspy rhasspy-bridge
 ```
 
+### Dejar Rhasspy + OpenClaw listo (voz)
+
+1. Copia el perfil base:
+
+```bash
+mkdir -p rhasspy/profiles/es
+cp rhasspy/profile.es.sample.json rhasspy/profiles/es/profile.json
+```
+
+2. Reinicia Rhasspy:
+
+```bash
+docker compose restart rhasspy
+```
+
+3. Abre Rhasspy en `http://<host>:12101` y en **Train** descarga/entrena el perfil.
+
+4. Prueba TTS:
+
+```bash
+curl -X POST 'http://127.0.0.1:12101/api/text-to-speech?play=true' \
+  -H 'Content-Type: text/plain' \
+  --data 'hola desde rhasspy'
+```
+
+5. Prueba bridge:
+
+```bash
+curl -X POST http://127.0.0.1:8099/rhasspy \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"dime buenos días"}'
+```
+
 Opcional (si quieres Ollama local en este mismo host):
 
 ```bash

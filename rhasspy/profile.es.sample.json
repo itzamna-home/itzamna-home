@@ -1,0 +1,36 @@
+{
+  "sounds": {
+    "system": "aplay",
+    "aplay": {
+      "device": "plughw:0,0",
+      "volume": 1
+    }
+  },
+  "microphone": {
+    "system": "arecord",
+    "arecord": {
+      "device": "plughw:0,0"
+    }
+  },
+  "speech_to_text": {
+    "system": "kaldi",
+    "kaldi": {
+      "open_transcription": true
+    }
+  },
+  "intent": {
+    "system": "fuzzywuzzy"
+  },
+  "handle": {
+    "system": "remote",
+    "remote": {
+      "url": "http://rhasspy-bridge:8099/rhasspy"
+    }
+  },
+  "dialogue": {
+    "system": "rhasspy"
+  },
+  "text_to_speech": {
+    "system": "espeak"
+  }
+}

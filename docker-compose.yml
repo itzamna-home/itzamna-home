@@ -7,6 +7,10 @@ services:
     restart: unless-stopped
     ports:
       - "12101:12101"
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
     volumes:
       - ./rhasspy/profiles:/profiles
     command: ["--user-profiles", "/profiles", "--profile", "es"]

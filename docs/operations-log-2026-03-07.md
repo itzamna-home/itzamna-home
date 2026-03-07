@@ -66,6 +66,7 @@ Nota: forzado directo por runtime quedó restringido por allowlist del entorno, 
 ## 6) Rhasspy + bridge
 
 - Rhasspy instalado en Docker en puerto `12101`
+- Se habilitó passthrough de audio ALSA al contenedor (`/dev/snd` + grupo `audio`)
 - Bridge HTTP en `:8099` para recibir texto de Rhasspy
 - Bridge genera respuesta con Ollama y reenvía traza a Telegram
 - Endpoint de salud: `GET /health`
