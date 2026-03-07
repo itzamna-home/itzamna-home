@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from flask import Flask, request, jsonify
+import os
 import subprocess
 import requests
 from datetime import datetime, timedelta
@@ -7,9 +8,12 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 
 # ---- Config ----
-TELEGRAM_CHAT_ID = "776654658"
-OLLAMA_URL = "http://192.168.100.64:11434/api/generate"
-OLLAMA_MODEL = "llama3.1:8b"
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "776654658")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.100.64:11434/api/generate")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+FALLBACK_MODEL = os.getenv("OLLAMA_FALLBACK_MODEL", "tinyllama:latest")
+HA_URL = os.getenv("HA_URL", "")
+HA_TOKEN = os.getenv("HA_TOKEN", "")
 WAKE_WORD = "hola"
 ARM_SECONDS = 20
 ARMED_UNTIL = None
@@ -28,7 +32,34 @@ def _call_ollama(model: str, prompt: str) -> str:
     return (data.get("response") or "").strip()
 
 
+def ask_ha(user_text: str) -> str:
+    if not (HA_URL and HA_TOKEN):
+        return ""
+    url = f"{HA_URL.rstrip('/')}/api/conversation/process"
+    headers = {
+        "Authorization": f"Bearer {HA_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {"text": user_text, "language": "es"}
+    r = requests.post(url, headers=headers, json=payload, timeout=20)
+    if r.status_code >= 400:
+        return ""
+    data = r.json() or {}
+    return (
+        ((data.get("response") or {}).get("speech") or {}).get("plain", {}).get("speech", "")
+        or ""
+    ).strip()
+
+
 def ask_llm(user_text: str) -> str:
+    # Prefer Home Assistant conversation when configured
+    try:
+        ha_reply = ask_ha(user_text)
+        if ha_reply:
+            return ha_reply
+    except Exception:
+        pass
+
     prompt = (
         "You are a home assistant voice bot. "
         "Reply in Mexican Spanish, concise (max 1 short sentence).\n"
@@ -42,7 +73,7 @@ def ask_llm(user_text: str) -> str:
         pass
 
     # fallback local model
-    reply = _call_ollama("tinyllama:latest", prompt)
+    reply = _call_ollama(FALLBACK_MODEL, prompt)
     return reply or "Listo."
 
 
@@ -85,6 +116,9 @@ def rhasspy_in():
     candidates = [c.strip() for c in candidates if isinstance(c, str) and c.strip()]
     text = candidates[0] if candidates else ''
 
+    # Debug trace for Rhasspy payload normalization
+    print(f"[bridge] payload_keys={list(data.keys())} candidates={candidates}", flush=True)
+
     if not text:
         return jsonify({"ok": False, "error": "No text in payload", "payload": data}), 400
 
@@ -98,6 +132,7 @@ def rhasspy_in():
         return bool(tokens) and all(t == WAKE_WORD for t in tokens)
 
     only_wake_tokens = any(is_wake_phrase(c) for c in candidates)
+    print(f"[bridge] normalized={normalized!r} only_wake_tokens={only_wake_tokens} armed_until={ARMED_UNTIL}", flush=True)
 
     if only_wake_tokens:
         ARMED_UNTIL = datetime.utcnow() + timedelta(seconds=ARM_SECONDS)

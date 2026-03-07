@@ -69,6 +69,23 @@ curl -X POST http://127.0.0.1:8099/rhasspy \
 
 Primera vez: completa el onboarding web y crea usuario admin.
 
+### Conectar Home Assistant al bridge (voz)
+
+1. Crea token de largo plazo en Home Assistant (`/profile`).
+2. Guarda token en `.env` (no versionado):
+
+```bash
+echo "HA_TOKEN=tu_token" >> .env
+```
+
+3. Reinicia bridge:
+
+```bash
+docker compose up -d rhasspy-bridge
+```
+
+Con esto, el bridge intenta resolver consultas por la API de conversación de Home Assistant antes de fallback a Ollama.
+
 Opcional (si quieres Ollama local en este mismo host):
 
 ```bash
