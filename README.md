@@ -17,6 +17,7 @@ Infra y documentación operativa de Itzamna Home.
 - OpenClaw Gateway (systemd, fuera de Docker)
 - Rhasspy (Docker)
 - Rhasspy Bridge (Docker)
+- Home Assistant (Docker)
 
 ### En otro host
 - Ollama (`192.168.100.64:11434`)
@@ -24,7 +25,7 @@ Infra y documentación operativa de Itzamna Home.
 ## Levantar stack por Docker
 
 ```bash
-docker compose up -d rhasspy rhasspy-bridge
+docker compose up -d rhasspy rhasspy-bridge homeassistant
 ```
 
 ### Dejar Rhasspy + OpenClaw listo (voz)
@@ -59,6 +60,14 @@ curl -X POST http://127.0.0.1:8099/rhasspy \
   -H 'Content-Type: application/json' \
   -d '{"text":"dime buenos días"}'
 ```
+
+### Home Assistant UI
+
+- URL local: `http://127.0.0.1:8124`
+- URL LAN: `http://<host>:8124`
+- Config persistente: `homeassistant/config`
+
+Primera vez: completa el onboarding web y crea usuario admin.
 
 Opcional (si quieres Ollama local en este mismo host):
 

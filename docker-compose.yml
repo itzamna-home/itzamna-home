@@ -30,6 +30,17 @@ services:
     volumes:
       - ~/.openclaw:/root/.openclaw
 
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    ports:
+      - "8124:8123"
+    environment:
+      TZ: America/Mexico_City
+    volumes:
+      - ./homeassistant/config:/config
+
   # Optional local Ollama (current production Ollama is remote on 192.168.100.64)
   ollama:
     image: ollama/ollama:latest
