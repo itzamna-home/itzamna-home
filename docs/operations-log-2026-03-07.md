@@ -84,3 +84,29 @@ Respuesta incluye:
 - `speech.text`
 
 Útil para TTS en Rhasspy.
+
+## 7) STT precisión + contención de micrófono
+
+- Se instaló `faster-whisper` y se levantó servicio user systemd `whisper-stt.service`.
+- Se cambió modelo de Whisper a `medium` para mejor precisión en español.
+- Se probaron varios enfoques de captura; se detectó contención/timeout con `api/listen-for-command` en ciertos flujos.
+- Flujo estable actual:
+  - captura por PipeWire (`pw-record`) desde `mic_bus.monitor`
+  - transcripción con Whisper
+  - envío al bridge (`/rhasspy`)
+  - TTS local por Rhasspy (`/api/text-to-speech?play=true`)
+- `voicecmd.sh` quedó ajustado al flujo anterior.
+
+## 8) Home Assistant + interfaz + integración de voz
+
+- Se agregó servicio `homeassistant` al `docker-compose.yml` del proyecto.
+- Se configuró en `network_mode: host` + `privileged: true` para mejorar discovery LAN (Hue).
+- Se integró Home Assistant Conversation API en el bridge:
+  - variables `HA_URL`, `HA_TOKEN`
+  - bridge intenta HA primero y cae a Ollama como fallback.
+- Se validó acceso API y control de luces Hue.
+- Entidades de luz detectadas en HA:
+  - `light.redonda`
+  - `light.chica`
+  - `light.cuarto_de_papa`
+- Se ejecutó prueba de acción real: encendido de `light.cuarto_de_papa` exitoso.

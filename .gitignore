@@ -1,3 +1,7 @@
 rhasspy/profiles/
 *.log
 .env
+
+# Runtime Home Assistant state (databases, secrets, logs)
+homeassistant/config/*
+!homeassistant/config/.gitkeep
