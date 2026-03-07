@@ -12,10 +12,13 @@
       "device": "plughw:0,0"
     }
   },
+  "wake": {
+    "system": "dummy"
+  },
   "speech_to_text": {
-    "system": "kaldi",
-    "kaldi": {
-      "open_transcription": true
+    "system": "remote",
+    "remote": {
+      "url": "http://172.17.0.1:8100/api/speech-to-text"
     }
   },
   "intent": {

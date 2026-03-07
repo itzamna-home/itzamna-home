@@ -1,43 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-shot voice command flow (higher accuracy):
+# One-shot voice command flow (single mic owner = Rhasspy):
 # 1) wake bridge with "hola"
-# 2) record audio from mic
-# 3) transcribe with faster-whisper (Spanish)
-# 4) send recognized text to bridge/OpenClaw
+# 2) Rhasspy captures audio from mic
+# 3) send recognized text to bridge/OpenClaw
 
 BRIDGE_URL="http://127.0.0.1:8099/rhasspy"
-MIC_DEVICE="${MIC_DEVICE:-plughw:0,0}"
-SECONDS_REC="${SECONDS_REC:-6}"
-WHISPER_MODEL="${WHISPER_MODEL:-medium}"
-TMP_WAV="/tmp/voicecmd.wav"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LISTEN_TIMEOUT="${LISTEN_TIMEOUT:-10}"
+LISTEN_TIMEOUT="${LISTEN_TIMEOUT:-12}"
 LISTEN_URL="http://127.0.0.1:12101/api/listen-for-command?timeout=${LISTEN_TIMEOUT}"
 
 curl -sS -X POST "$BRIDGE_URL" \
   -H "Content-Type: application/json" \
   -d '{"text":"hola"}' >/dev/null
 
-echo "🎤 Habla ahora (${SECONDS_REC}s, mic=${MIC_DEVICE})..."
+echo "🎤 Habla ahora (timeout ${LISTEN_TIMEOUT}s)..."
+RESP=$(curl -sS -X POST "$LISTEN_URL" || true)
+echo "📦 Rhasspy: $RESP"
 
-CMD=""
-if arecord -D "$MIC_DEVICE" -f S16_LE -c 1 -r 16000 -d "$SECONDS_REC" "$TMP_WAV" >/dev/null 2>&1; then
-  CMD=$(python3 "$SCRIPT_DIR/whisper_stt.py" "$TMP_WAV" --model "$WHISPER_MODEL" --lang es)
-  echo "📝 Detectado (Whisper): $CMD"
+if [[ "$RESP" == \{*\} ]]; then
+  CMD=$(echo "$RESP" | jq -r '.raw_text // .text // empty')
+  echo "📝 Detectado: $CMD"
 else
-  echo "⚠️ Mic ocupado/no disponible; usando captura de Rhasspy..."
-  RESP=$(curl -sS -X POST "$LISTEN_URL" || true)
-  echo "📦 Rhasspy: $RESP"
-
-  if [[ "$RESP" == \{*\} ]]; then
-    CMD=$(echo "$RESP" | jq -r '.raw_text // .text // empty')
-    echo "📝 Detectado (Rhasspy): $CMD"
-  else
-    echo "❌ Rhasspy no devolvió JSON (probable timeout). Intenta hablar más cerca del mic o aumenta timeout." >&2
-    exit 1
-  fi
+  echo "❌ Rhasspy no devolvió JSON (probable timeout). Habla justo después del prompt o sube LISTEN_TIMEOUT." >&2
+  exit 1
 fi
 
 if [[ -z "$CMD" ]]; then

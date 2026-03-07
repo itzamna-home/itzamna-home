@@ -72,11 +72,11 @@ docker compose --profile local-ollama up -d ollama
 bash scripts/voicecmd.sh
 ```
 
-Hace todo en una sola ejecución (modo precisión):
+Hace todo en una sola ejecución (sin pelea de micrófono):
 
 1. activa wake (`hola`)
-2. graba micrófono local
-3. transcribe con **faster-whisper** en español
+2. Rhasspy captura micrófono
+3. toma texto reconocido (`raw_text`)
 4. envía el texto a OpenClaw/Ollama bridge
 
 Requisitos en host:
@@ -111,7 +111,13 @@ systemctl --user status whisper-stt.service --no-pager
 }
 ```
 
-3. Reinicia Rhasspy:
+3. Desactiva wake interno de Rhasspy (el wake lo maneja el bridge con "hola") para evitar contención de micrófono:
+
+```json
+"wake": { "system": "dummy" }
+```
+
+4. Reinicia Rhasspy:
 
 ```bash
 docker restart rhasspy
