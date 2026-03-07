@@ -39,8 +39,16 @@ fi
 
 PAYLOAD=$(jq -n --arg t "$CMD" --arg w "default" '{raw_text:$t,wakeword_id:$w}')
 
-curl -sS -X POST "$BRIDGE_URL" \
+RESP_JSON=$(curl -sS -X POST "$BRIDGE_URL" \
   -H "Content-Type: application/json" \
-  -d "$PAYLOAD"
+  -d "$PAYLOAD")
+
+echo "$RESP_JSON"
+
+# Speak response locally through Rhasspy speaker
+echo "$RESP_JSON" | jq -r '.speech.text // .reply // empty' | \
+  curl -sS -X POST 'http://127.0.0.1:12101/api/text-to-speech?play=true' \
+    -H 'Content-Type: text/plain' \
+    --data-binary @- >/dev/null || true
 
 echo
