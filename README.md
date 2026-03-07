@@ -92,10 +92,14 @@ pip3 install --user --break-system-packages faster-whisper
 
 ### Rhasspy con STT Whisper remoto (recomendado)
 
-1. Levanta servidor STT Whisper en host:
+1. Instala servicio systemd user (persistente):
 
 ```bash
-nohup python3 ~/.openclaw/workspace/rhasspy/whisper_stt_server.py > ~/.openclaw/workspace/rhasspy/whisper-stt.log 2>&1 &
+mkdir -p ~/.config/systemd/user
+cp systemd/whisper-stt.service ~/.config/systemd/user/whisper-stt.service
+systemctl --user daemon-reload
+systemctl --user enable --now whisper-stt.service
+systemctl --user status whisper-stt.service --no-pager
 ```
 
 2. Configura Rhasspy para usar STT remoto:

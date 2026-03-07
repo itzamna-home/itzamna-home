@@ -1,0 +1,17 @@
+[Unit]
+Description=Whisper STT server for Rhasspy (faster-whisper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/.openclaw/workspace
+Environment=WHISPER_MODEL=small
+Environment=WHISPER_LANG=es
+Environment=WHISPER_COMPUTE=int8
+ExecStart=/usr/bin/python3 /home/user/.openclaw/workspace/rhasspy/whisper_stt_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
