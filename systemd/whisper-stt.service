@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/user/.openclaw/workspace
-Environment=WHISPER_MODEL=small
+Environment=WHISPER_MODEL=medium
 Environment=WHISPER_LANG=es
 Environment=WHISPER_COMPUTE=int8
 ExecStart=/usr/bin/python3 /home/user/.openclaw/workspace/rhasspy/whisper_stt_server.py

@@ -61,18 +61,29 @@ def rhasspy_in():
     data = request.get_json(silent=True) or {}
 
     # Accept multiple Rhasspy payload styles
-    text = (
-        data.get('text')
-        or data.get('input')
-        or data.get('utterance')
-        or data.get('raw_text')
-        or ((data.get('slots') or {}).get('text') if isinstance(data.get('slots'), dict) else None)
-        or ''
-    ).strip()
+    candidates = [
+        # Prefer raw ASR text first; Rhasspy "text" may be intent-normalized.
+        data.get('raw_text'),
+        data.get('raw_input'),
+        data.get('rawInput'),
+        data.get('text'),
+        data.get('input'),
+        data.get('utterance'),
+    ]
 
-    # Some intent payloads carry text in nested/alternate fields
-    if not text and isinstance(data.get('intent'), dict):
-        text = (data['intent'].get('name') or '').strip()
+    if isinstance(data.get('slots'), dict):
+        candidates.append(data['slots'].get('text'))
+
+    if isinstance(data.get('intent'), dict):
+        candidates.extend([
+            data['intent'].get('input'),
+            data['intent'].get('raw_input'),
+            data['intent'].get('rawInput'),
+            data['intent'].get('name'),
+        ])
+
+    candidates = [c.strip() for c in candidates if isinstance(c, str) and c.strip()]
+    text = candidates[0] if candidates else ''
 
     if not text:
         return jsonify({"ok": False, "error": "No text in payload", "payload": data}), 400
@@ -80,8 +91,15 @@ def rhasspy_in():
     global ARMED_UNTIL
     normalized = text.strip().lower()
 
-    # Wake-word flow: say "hola" first, then next utterance is treated as command.
-    if normalized == WAKE_WORD:
+    # Wake-word flow: tolerate ASR repeats like "hola hola" and check all candidate text forms.
+    def is_wake_phrase(s: str) -> bool:
+        s = s.strip().lower()
+        tokens = [t for t in s.replace(',', ' ').replace('.', ' ').split() if t]
+        return bool(tokens) and all(t == WAKE_WORD for t in tokens)
+
+    only_wake_tokens = any(is_wake_phrase(c) for c in candidates)
+
+    if only_wake_tokens:
         ARMED_UNTIL = datetime.utcnow() + timedelta(seconds=ARM_SECONDS)
         answer = "Te escucho. ¿Cuál es tu comando?"
         return jsonify({
@@ -95,7 +113,13 @@ def rhasspy_in():
             "stderr": "",
         })
 
-    if (ARMED_UNTIL is None) or (datetime.utcnow() > ARMED_UNTIL):
+    # If Rhasspy provides wakeword/session signal, allow command without manual arm state.
+    wakeword_signal = data.get('wakeword_id')
+    if (not wakeword_signal) and isinstance(data.get('intent'), dict):
+        wakeword_signal = data['intent'].get('wakeword_id')
+
+    is_armed = (ARMED_UNTIL is not None) and (datetime.utcnow() <= ARMED_UNTIL)
+    if not is_armed and not wakeword_signal:
         answer = "Di hola para activarme."
         return jsonify({
             "ok": True,
