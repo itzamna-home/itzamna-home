@@ -1,0 +1,56 @@
+name: itzamna-home
+
+services:
+  rhasspy:
+    image: rhasspy/rhasspy:latest
+    container_name: rhasspy
+    restart: unless-stopped
+    ports:
+      - "12101:12101"
+    volumes:
+      - ./rhasspy/profiles:/profiles
+    command: ["--user-profiles", "/profiles", "--profile", "es"]
+
+  rhasspy-bridge:
+    build:
+      context: ./rhasspy-bridge
+    container_name: rhasspy-bridge
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    environment:
+      TELEGRAM_CHAT_ID: "776654658"
+      OLLAMA_URL: "http://192.168.100.64:11434/api/generate"
+      OLLAMA_MODEL: "llama3.1:8b"
+      OLLAMA_FALLBACK_MODEL: "tinyllama:latest"
+    volumes:
+      - ~/.openclaw:/root/.openclaw
+
+  # Optional local Ollama (current production Ollama is remote on 192.168.100.64)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-local
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    profiles: ["local-ollama"]
+
+  # Optional OpenClaw in Docker (current production gateway runs as systemd on host)
+  openclaw-gateway:
+    image: node:22-bullseye
+    container_name: openclaw-gateway
+    restart: unless-stopped
+    working_dir: /opt/openclaw
+    command: >
+      bash -lc "npm i -g openclaw && openclaw gateway"
+    ports:
+      - "18789:18789"
+    volumes:
+      - ~/.openclaw:/root/.openclaw
+      - ./:/workspace
+    profiles: ["docker-openclaw"]
+
+volumes:
+  ollama-data:
