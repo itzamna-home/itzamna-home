@@ -75,8 +75,8 @@ bash scripts/voicecmd.sh
 Hace todo en una sola ejecución (sin pelea de micrófono):
 
 1. activa wake (`hola`)
-2. Rhasspy captura micrófono
-3. toma texto reconocido (`raw_text`)
+2. captura audio por PipeWire (`pw-record`)
+3. transcribe con faster-whisper
 4. envía el texto a OpenClaw/Ollama bridge
 
 Requisitos en host:
@@ -155,9 +155,8 @@ Notas:
 - En la primera ejecución, Whisper descargará el modelo (puede tardar).
 - Puedes ajustar variables:
   - `WHISPER_MODEL=small|medium`
-  - `MIC_DEVICE=plughw:0,0`
+  - `AUDIO_SOURCE=mic_bus.monitor`
   - `SECONDS_REC=6`
-  - `LISTEN_TIMEOUT=10` (cuando usa fallback Rhasspy)
 
 ## Documentación
 
