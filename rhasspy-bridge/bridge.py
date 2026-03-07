@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 from flask import Flask, request, jsonify
-import os
 import subprocess
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ---- Config (override with env vars in docker-compose) ----
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "776654658")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.100.64:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
-FALLBACK_MODEL = os.getenv("OLLAMA_FALLBACK_MODEL", "tinyllama:latest")
+# ---- Config ----
+TELEGRAM_CHAT_ID = "776654658"
+OLLAMA_URL = "http://192.168.100.64:11434/api/generate"
+OLLAMA_MODEL = "llama3.1:8b"
+WAKE_WORD = "hola"
+ARM_SECONDS = 20
+ARMED_UNTIL = None
 
 
 def run_cmd(cmd):
@@ -40,7 +41,8 @@ def ask_llm(user_text: str) -> str:
     except Exception:
         pass
 
-    reply = _call_ollama(FALLBACK_MODEL, prompt)
+    # fallback local model
+    reply = _call_ollama("tinyllama:latest", prompt)
     return reply or "Listo."
 
 
@@ -51,7 +53,6 @@ def health():
         "service": "rhasspy-openclaw-bridge",
         "time": datetime.utcnow().isoformat() + "Z",
         "ollama_model": OLLAMA_MODEL,
-        "fallback_model": FALLBACK_MODEL,
     }
 
 
@@ -69,18 +70,53 @@ def rhasspy_in():
         or ''
     ).strip()
 
-    # Some payloads carry fallback text in intent metadata
+    # Some intent payloads carry text in nested/alternate fields
     if not text and isinstance(data.get('intent'), dict):
         text = (data['intent'].get('name') or '').strip()
 
     if not text:
         return jsonify({"ok": False, "error": "No text in payload", "payload": data}), 400
 
+    global ARMED_UNTIL
+    normalized = text.strip().lower()
+
+    # Wake-word flow: say "hola" first, then next utterance is treated as command.
+    if normalized == WAKE_WORD:
+        ARMED_UNTIL = datetime.utcnow() + timedelta(seconds=ARM_SECONDS)
+        answer = "Te escucho. ¿Cuál es tu comando?"
+        return jsonify({
+            "ok": True,
+            "heard": text,
+            "armed": True,
+            "reply": answer,
+            "speech": {"text": answer},
+            "telegramForwarded": False,
+            "stdout": "",
+            "stderr": "",
+        })
+
+    if (ARMED_UNTIL is None) or (datetime.utcnow() > ARMED_UNTIL):
+        answer = "Di hola para activarme."
+        return jsonify({
+            "ok": True,
+            "heard": text,
+            "armed": False,
+            "reply": answer,
+            "speech": {"text": answer},
+            "telegramForwarded": False,
+            "stdout": "",
+            "stderr": "",
+        })
+
+    # Consume armed state and execute command
+    ARMED_UNTIL = None
+
     try:
         answer = ask_llm(text)
     except Exception as e:
         answer = f"No pude procesarlo ahorita: {e}"
 
+    # Optional trace to Telegram
     msg = f"🎙️ Rhasspy: {text}\n🤖 {answer}"
     cmd = [
         "openclaw", "message", "send",
@@ -91,9 +127,11 @@ def rhasspy_in():
     ]
     code, out, err = run_cmd(cmd)
 
+    # Return text for Rhasspy TTS/webhook consumers
     return jsonify({
         "ok": True,
         "heard": text,
+        "armed": False,
         "reply": answer,
         "speech": {"text": answer},
         "telegramForwarded": code == 0,
