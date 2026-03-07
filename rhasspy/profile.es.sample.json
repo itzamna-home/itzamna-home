@@ -9,7 +9,7 @@
   "microphone": {
     "system": "arecord",
     "arecord": {
-      "device": "plughw:0,0"
+      "device": "plug:microfono_compartido"
     }
   },
   "wake": {

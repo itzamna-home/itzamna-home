@@ -117,7 +117,34 @@ systemctl --user status whisper-stt.service --no-pager
 "wake": { "system": "dummy" }
 ```
 
-4. Reinicia Rhasspy:
+4. Configura ALSA compartido (`dsnoop`) para evitar pelea de micrófono:
+
+`~/.asoundrc`
+
+```ini
+pcm.microfono_compartido {
+  type dsnoop
+  ipc_key 1024
+  ipc_key_add_uid true
+  slave {
+    pcm "hw:0,0"
+    channels 1
+    rate 16000
+    format S16_LE
+  }
+}
+```
+
+y en perfil Rhasspy usa:
+
+```json
+"microphone": {
+  "system": "arecord",
+  "arecord": { "device": "plug:microfono_compartido" }
+}
+```
+
+5. Reinicia Rhasspy:
 
 ```bash
 docker restart rhasspy
