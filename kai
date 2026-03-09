@@ -707,6 +707,62 @@ def pick(options: list[str], title: str) -> str | None:
     return None
 
 
+TOOLS_SYSTEM = (
+    "You are a Kali Linux expert. "
+    "Return ONLY a comma-separated list of binary tool names needed for the given audit. "
+    "No explanations, no flags, no sentences — just tool names."
+)
+
+ASSEMBLE_SYSTEM = (
+    "You are a Kali Linux expert. "
+    "Assemble shell commands for the audit using ONLY the tools listed below and ONLY flags "
+    "that appear in their --help output. "
+    "Wrap all commands in a single ```bash code block, one command per line. "
+    "No explanations outside the code block. "
+    "Commands must be immediately executable against the given target."
+)
+
+
+def ask_tools(audit_type: str, audit_prompt: str) -> list[str]:
+    """Step 1 — ask LLM which tools to use. Returns list of binary names."""
+    prompt = f"Audit type: {audit_type}\n\n{audit_prompt}"
+    print(f"{GRAY}Step 1/3 — selecting tools...{RESET}", flush=True)
+    raw = ask_ollama_silent(prompt, system=TOOLS_SYSTEM)
+    dbg("tools raw", raw)
+    return [t.strip().lower() for t in raw.replace("\n", ",").split(",") if t.strip()]
+
+
+def resolve_tools(tool_names: list[str]) -> dict[str, str]:
+    """Step 2 — whereis each tool, get --help. Returns {name: help_text} for found tools."""
+    resolved = {}
+    for name in tool_names:
+        path = find_binary(name)
+        if not path:
+            print(f"  {YELLOW}[not found]{RESET} {name}")
+            continue
+        help_text = get_help(path)
+        print(f"  {GREEN}[found]{RESET} {name} → {path}")
+        dbg(f"{name} help length", len(help_text))
+        resolved[name] = help_text
+    return resolved
+
+
+def ask_assemble(resolved: dict[str, str], target: str, audit_type: str, ctx: str) -> str:
+    """Step 3 — give LLM the real help outputs, ask it to assemble valid commands."""
+    tools_block = ""
+    for name, help_text in resolved.items():
+        tools_block += f"\n--- {name} --help ---\n{help_text}\n"
+
+    prompt = (
+        f"Audit: {audit_type}\n"
+        f"Target: {target}\n"
+        f"{ctx}\n\n"
+        f"Available tools and their help output:{tools_block}"
+    )
+    print(f"{GRAY}Step 3/3 — assembling commands...{RESET}", flush=True)
+    return ask_ollama(prompt, system=ASSEMBLE_SYSTEM)
+
+
 def run_audit() -> None:
     categories = list(AUDITS.keys())
     category = pick(categories, "Audit Category")
@@ -728,29 +784,36 @@ def run_audit() -> None:
         print(f"{YELLOW}No target specified.{RESET}")
         return
 
-    print(f"\n{GRAY}Gathering context...{RESET}", flush=True)
     ctx = gather_context(audit_def["context"])
     ctx += f"\ntarget: {target}"
-    dbg("audit context", ctx)
+    audit_type = f"{category} / {subcategory}"
 
-    prompt = f"Audit target: {target}\nAudit type: {category} / {subcategory}"
-    system = BASE_SYSTEM_PROMPT + "\n\n" + audit_def["prompt"]
-
-    print(f"{GRAY}Generating audit commands...{RESET}", flush=True)
+    # Step 1 — which tools?
     try:
-        reply = ask_ollama(prompt, system=system, context=ctx)
+        tool_names = ask_tools(audit_type, audit_def["prompt"])
+    except requests.RequestException:
+        return
+    if not tool_names:
+        print(f"{YELLOW}No tools suggested.{RESET}")
+        return
+    print(f"  Tools: {', '.join(tool_names)}")
+
+    # Step 2 — whereis + --help
+    print(f"\n{GRAY}Step 2/3 — resolving tools...{RESET}", flush=True)
+    resolved = resolve_tools(tool_names)
+    if not resolved:
+        print(f"{RED}None of the suggested tools were found on this machine.{RESET}")
+        return
+
+    # Step 3 — assemble commands from real help output
+    try:
+        reply = ask_assemble(resolved, target, audit_type, ctx)
     except requests.RequestException:
         return
 
     commands = extract_commands(reply)
     if not commands:
         print(f"{YELLOW}No commands found in response.{RESET}")
-        return
-
-    print(f"\n{BOLD}Validating commands...{RESET}")
-    commands = validate_and_refine(commands)
-    if not commands:
-        print(f"{YELLOW}No valid commands after validation.{RESET}")
         return
 
     print(f"\n{BOLD}Audit plan — {category} / {subcategory} → {target}{RESET}")
