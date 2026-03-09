@@ -1,0 +1,735 @@
+#!/usr/bin/env python3
+import requests
+import subprocess
+import re
+import sys
+import time
+import json
+import argparse
+import readline  # noqa: F401 — enables arrow keys, history, Ctrl+A/E in input()
+from datetime import datetime
+from pathlib import Path
+
+OLLAMA_HOST = "127.0.0.1:11434"
+MODEL       = "qwen3:8b"
+DEBUG       = False
+
+
+def ollama_url() -> str:
+    host = OLLAMA_HOST if "://" in OLLAMA_HOST else f"http://{OLLAMA_HOST}"
+    return f"{host.rstrip('/')}/api/generate"
+
+
+def ollama_tags_url() -> str:
+    host = OLLAMA_HOST if "://" in OLLAMA_HOST else f"http://{OLLAMA_HOST}"
+    return f"{host.rstrip('/')}/api/tags"
+
+# ---------------------------------------------------------------------------
+# ANSI
+# ---------------------------------------------------------------------------
+GRAY   = "\033[90m"
+CYAN   = "\033[96m"
+YELLOW = "\033[93m"
+GREEN  = "\033[92m"
+RED    = "\033[91m"
+BOLD   = "\033[1m"
+RESET  = "\033[0m"
+
+# ---------------------------------------------------------------------------
+# Audit tree — each leaf has a specialized system prompt and context tags
+# ---------------------------------------------------------------------------
+AUDITS = {
+    "Web": {
+        "Public Web": {
+            "prompt": (
+                "You are an expert web application penetration tester on Kali Linux. "
+                "Perform a comprehensive public-facing web audit on the given target. "
+                "Include: technology fingerprinting (whatweb, wafw00f), directory/file enumeration "
+                "(gobuster or feroxbuster), vulnerability scanning (nikto), SSL/TLS analysis (testssl.sh or sslyze), "
+                "and header inspection (curl). Use aggressive but legal settings."
+            ),
+            "context": ["network"],
+        },
+        "Internal Web": {
+            "prompt": (
+                "You are an expert internal web penetration tester on Kali Linux. "
+                "Audit an internal web application on the given target. "
+                "Include: service discovery (nmap), vhost enumeration, directory brute-force (gobuster), "
+                "authentication testing, and default credential checks."
+            ),
+            "context": ["network"],
+        },
+        "APIs": {
+            "prompt": (
+                "You are an API security tester on Kali Linux. "
+                "Audit the REST/GraphQL API at the given target. "
+                "Include: endpoint discovery, method enumeration (curl), authentication bypass attempts, "
+                "parameter fuzzing (ffuf), and OWASP API Top 10 checks."
+            ),
+            "context": ["network"],
+        },
+        "Admin Panels": {
+            "prompt": (
+                "You are a penetration tester hunting exposed admin panels on Kali Linux. "
+                "Find and test admin interfaces at the given target. "
+                "Include: common admin path enumeration (gobuster with admin wordlist), default credential testing, "
+                "login brute-force (hydra), and session management checks."
+            ),
+            "context": ["network"],
+        },
+    },
+    "Wireless": {
+        "Wi-Fi": {
+            "prompt": (
+                "You are a wireless security auditor on Kali Linux. "
+                "Audit Wi-Fi security for the given interface/target. "
+                "Include: interface setup (airmon-ng), network discovery (airodump-ng), "
+                "handshake capture, WPS testing (wash, reaver), and signal analysis."
+            ),
+            "context": ["network", "wireless"],
+        },
+        "Bluetooth / BLE": {
+            "prompt": (
+                "You are a Bluetooth security auditor on Kali Linux. "
+                "Audit Bluetooth and BLE devices near the given target/interface. "
+                "Include: device scanning (hcitool, bluetoothctl, bettercap), "
+                "service enumeration (sdptool), and BLE advertisement sniffing."
+            ),
+            "context": ["network"],
+        },
+    },
+    "Network / Infrastructure": {
+        "Host Discovery": {
+            "prompt": (
+                "You are a network penetration tester on Kali Linux. "
+                "Perform comprehensive host discovery on the given subnet/target. "
+                "Include: ping sweep (nmap -sn), ARP scan (arp-scan), "
+                "passive discovery (netdiscover), and OS fingerprinting."
+            ),
+            "context": ["network"],
+        },
+        "Port / Service Review": {
+            "prompt": (
+                "You are a network penetration tester on Kali Linux. "
+                "Perform a full port and service audit on the given target. "
+                "Include: full TCP scan (nmap -sS -p-), UDP scan (nmap -sU top ports), "
+                "service/version detection (-sV), and script scanning (-sC)."
+            ),
+            "context": ["network"],
+        },
+        "DNS / VPN": {
+            "prompt": (
+                "You are a network security auditor on Kali Linux. "
+                "Audit DNS and VPN exposure for the given target/domain. "
+                "Include: DNS enumeration (dnsenum, fierce, dnsrecon), zone transfer attempts, "
+                "subdomain brute-force, and VPN fingerprinting."
+            ),
+            "context": ["network"],
+        },
+        "Segmentation": {
+            "prompt": (
+                "You are a network segmentation tester on Kali Linux. "
+                "Verify network segmentation and firewall rules for the given target. "
+                "Include: cross-segment reach tests (nmap from this host), "
+                "firewall rule enumeration, VLAN hopping attempts, and routing checks."
+            ),
+            "context": ["network"],
+        },
+    },
+    "Endpoint / Host": {
+        "Linux": {
+            "prompt": (
+                "You are a Linux host penetration tester on Kali Linux. "
+                "Perform a local privilege escalation and misconfiguration audit. "
+                "Include: SUID/SGID binaries, sudo misconfigs, cron jobs, writable paths, "
+                "kernel exploits (uname -r check), and running services."
+            ),
+            "context": ["process", "file"],
+        },
+        "Windows": {
+            "prompt": (
+                "You are a Windows endpoint auditor operating from Kali Linux. "
+                "Audit the Windows target at the given IP. "
+                "Include: SMB enumeration (enum4linux, smbclient), RPC (rpcclient), "
+                "credential attacks (crackmapexec), and patch level check."
+            ),
+            "context": ["network"],
+        },
+        "macOS": {
+            "prompt": (
+                "You are an endpoint auditor targeting macOS from Kali Linux. "
+                "Audit the macOS target at the given IP. "
+                "Include: service enumeration (nmap), SMB/AFP shares, SSH audit, "
+                "and common macOS remote access vectors."
+            ),
+            "context": ["network"],
+        },
+        "Servers / Workstations": {
+            "prompt": (
+                "You are a server security auditor on Kali Linux. "
+                "Perform a full server audit on the given target. "
+                "Include: port scan, service banners, known CVE checks (searchsploit), "
+                "misconfigurations, exposed management interfaces, and patch level."
+            ),
+            "context": ["network", "process"],
+        },
+    },
+    "Cloud / Containers": {
+        "Docker": {
+            "prompt": (
+                "You are a container security auditor on Kali Linux. "
+                "Audit Docker security on the given host/target. "
+                "Include: exposed Docker daemon (port 2375/2376), image inspection, "
+                "container escape vectors, privileged containers, and mounted sockets."
+            ),
+            "context": ["network", "process"],
+        },
+        "Kubernetes": {
+            "prompt": (
+                "You are a Kubernetes security auditor on Kali Linux. "
+                "Audit the Kubernetes cluster at the given target. "
+                "Include: exposed API server, dashboard, RBAC misconfigs, "
+                "etcd exposure, and kubelet API checks."
+            ),
+            "context": ["network"],
+        },
+        "IAM": {
+            "prompt": (
+                "You are a cloud IAM security auditor on Kali Linux. "
+                "Audit identity and access management for the given cloud target. "
+                "Include: overprivileged roles, public S3/storage buckets, "
+                "metadata service exposure (169.254.169.254), and credential leaks."
+            ),
+            "context": ["network"],
+        },
+        "Storage / Services": {
+            "prompt": (
+                "You are a cloud storage security auditor on Kali Linux. "
+                "Audit cloud storage and services at the given target. "
+                "Include: public bucket enumeration (s3scanner, gcpbucketbrute), "
+                "unauthenticated blob access, and exposed database services."
+            ),
+            "context": ["network"],
+        },
+    },
+    "Identity / Access": {
+        "Accounts": {
+            "prompt": (
+                "You are an identity security auditor on Kali Linux. "
+                "Audit account security for the given target/domain. "
+                "Include: username enumeration, password policy check, "
+                "locked account detection, and default/weak credential testing."
+            ),
+            "context": ["network"],
+        },
+        "MFA": {
+            "prompt": (
+                "You are an MFA bypass tester on Kali Linux. "
+                "Test multi-factor authentication on the given target. "
+                "Include: MFA bypass via token reuse, OTP brute-force, "
+                "SIM swap indicators, and backup code exposure."
+            ),
+            "context": ["network"],
+        },
+        "SSO / OAuth": {
+            "prompt": (
+                "You are an OAuth/SSO security tester on Kali Linux. "
+                "Audit SSO and OAuth flows on the given target. "
+                "Include: redirect_uri manipulation, token leakage, PKCE bypass, "
+                "state parameter validation, and open redirect chains."
+            ),
+            "context": ["network"],
+        },
+        "Authorization": {
+            "prompt": (
+                "You are an authorization tester on Kali Linux. "
+                "Test access control and authorization on the given target. "
+                "Include: IDOR testing, privilege escalation via API, "
+                "horizontal/vertical privilege checks, and JWT manipulation."
+            ),
+            "context": ["network"],
+        },
+    },
+    "Code / DevSecOps": {
+        "Repos": {
+            "prompt": (
+                "You are a source code security auditor on Kali Linux. "
+                "Audit the code repository at the given path/URL for secrets and vulnerabilities. "
+                "Include: secret scanning (truffleHog, gitleaks), hardcoded credentials, "
+                "sensitive file exposure, and git history review."
+            ),
+            "context": ["file"],
+        },
+        "Dependencies": {
+            "prompt": (
+                "You are a dependency security auditor on Kali Linux. "
+                "Audit project dependencies at the given path for known vulnerabilities. "
+                "Include: CVE checks (safety, npm audit, trivy), outdated packages, "
+                "transitive dependency risks, and license issues."
+            ),
+            "context": ["file"],
+        },
+        "CI/CD": {
+            "prompt": (
+                "You are a CI/CD pipeline security auditor on Kali Linux. "
+                "Audit CI/CD configuration at the given path/target. "
+                "Include: exposed secrets in pipeline files, insecure runners, "
+                "artifact tampering vectors, and supply chain risks."
+            ),
+            "context": ["file", "network"],
+        },
+        "IaC": {
+            "prompt": (
+                "You are an Infrastructure-as-Code security auditor on Kali Linux. "
+                "Audit IaC files (Terraform, Ansible, Helm) at the given path. "
+                "Include: tfsec, checkov, ansible-lint for misconfigurations, "
+                "hardcoded secrets, and overly permissive policies."
+            ),
+            "context": ["file"],
+        },
+    },
+    "Mobile": {
+        "Android": {
+            "prompt": (
+                "You are a mobile security tester targeting Android from Kali Linux. "
+                "Audit the Android APK/device at the given path/target. "
+                "Include: APK decompilation (apktool, jadx), manifest analysis, "
+                "hardcoded secrets, network traffic interception setup (mitmproxy), "
+                "and ADB-based checks."
+            ),
+            "context": ["network", "file"],
+        },
+        "iOS": {
+            "prompt": (
+                "You are a mobile security tester targeting iOS from Kali Linux. "
+                "Audit the iOS IPA/target at the given path/target. "
+                "Include: IPA extraction, binary analysis, plist inspection, "
+                "SSL pinning bypass options, and network traffic analysis setup."
+            ),
+            "context": ["network", "file"],
+        },
+    },
+    "IoT / Devices": {
+        "Smart Home": {
+            "prompt": (
+                "You are an IoT security auditor on Kali Linux. "
+                "Audit smart home devices on the given network/target. "
+                "Include: device discovery (nmap, arp-scan), firmware version detection, "
+                "exposed web interfaces, default credentials, and MQTT/CoAP enumeration."
+            ),
+            "context": ["network"],
+        },
+        "Sensors": {
+            "prompt": (
+                "You are an IoT sensor security auditor on Kali Linux. "
+                "Audit sensor devices on the given network/target. "
+                "Include: protocol enumeration (MQTT, Zigbee, Z-Wave), "
+                "unencrypted transmission checks, and firmware exposure."
+            ),
+            "context": ["network"],
+        },
+        "Cameras": {
+            "prompt": (
+                "You are an IP camera security auditor on Kali Linux. "
+                "Audit IP cameras on the given network/target. "
+                "Include: RTSP stream discovery (nmap, cvemap), default credentials, "
+                "ONVIF enumeration, firmware version, and unauthenticated stream access."
+            ),
+            "context": ["network"],
+        },
+        "Embedded Devices": {
+            "prompt": (
+                "You are an embedded device security auditor on Kali Linux. "
+                "Audit embedded devices on the given network/target. "
+                "Include: port scan, banner grabbing, telnet/serial exposure, "
+                "firmware download attempts, and known CVE lookup (searchsploit)."
+            ),
+            "context": ["network"],
+        },
+    },
+}
+
+BASE_SYSTEM_PROMPT = (
+    "You are an expert Kali Linux penetration tester. "
+    "Respond ONLY with shell commands in a single ```bash code block. "
+    "Do not explain. Do not add text outside the code block. "
+    "NEVER use placeholder paths — use real values from the system context provided. "
+    "Commands must be immediately executable without modification. "
+    "Use the target provided by the user."
+)
+
+FREEFORM_SYSTEM_PROMPT = (
+    "You are a Linux shell assistant. "
+    "When the user describes a task, respond ONLY with the shell commands needed to accomplish it. "
+    "Wrap all commands in a single ```bash code block. "
+    "Do not explain or add any text outside the code block. "
+    "NEVER use placeholder paths like /path/to/directory or <directory>. "
+    "If no path is specified, use the current directory (.) or $PWD. "
+    "Commands must be immediately executable without any modification."
+)
+
+# ---------------------------------------------------------------------------
+# Context gathering
+# ---------------------------------------------------------------------------
+
+def run_silent(cmd: list[str]) -> str:
+    return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+
+
+def base_context() -> dict:
+    return {
+        "hostname": run_silent(["hostname"]),
+        "os":       run_silent(["uname", "-sr"]),
+        "cwd":      run_silent(["pwd"]),
+        "user":     run_silent(["whoami"]),
+    }
+
+
+def network_context() -> dict:
+    info = {}
+    for line in run_silent(["ip", "route", "show", "default"]).splitlines():
+        parts = line.split()
+        if "dev" in parts:
+            info["interface"] = parts[parts.index("dev") + 1]
+        if "via" in parts:
+            info["gateway"] = parts[parts.index("via") + 1]
+    if "interface" in info:
+        for line in run_silent(["ip", "-o", "-4", "addr", "show", info["interface"]]).splitlines():
+            parts = line.split()
+            if "inet" in parts:
+                info["ip_cidr"] = parts[parts.index("inet") + 1]
+    return info
+
+
+def disk_context() -> dict:
+    return {"disk_usage": run_silent(["df", "-h", "--output=source,size,used,avail,pcent,target",
+                                       "-x", "tmpfs", "-x", "devtmpfs"])}
+
+
+def process_context() -> dict:
+    return {"top_processes": "\n".join(
+        run_silent(["ps", "aux", "--sort=-%cpu", "--no-headers", "-w"]).splitlines()[:10])}
+
+
+def file_context(cwd: str) -> dict:
+    return {"directory_listing": run_silent(["ls", "-lah", cwd])}
+
+
+FREEFORM_TRIGGERS = {
+    "network": ["network", "scan", "nmap", "ip", "interface", "subnet", "ping",
+                "port", "device", "wifi", "ethernet", "route", "gateway", "host"],
+    "disk":    ["disk", "partition", "storage", "space", "mount", "filesystem", "df", "du", "drive"],
+    "process": ["process", "cpu", "memory", "ram", "pid", "running", "kill", "top", "htop", "service"],
+    "file":    ["file", "directory", "folder", "list", "count", "find", "ls", "tree", "path"],
+}
+
+
+def gather_context(tags: list[str], cwd: str = ".") -> str:
+    ctx = base_context()
+    if "network" in tags:
+        ctx.update(network_context())
+    if "disk" in tags:
+        ctx.update(disk_context())
+    if "process" in tags:
+        ctx.update(process_context())
+    if "file" in tags:
+        ctx.update(file_context(cwd))
+    return "System context:\n" + "\n".join(f"{k}: {v}" for k, v in ctx.items())
+
+
+def freeform_context(prompt: str) -> str:
+    triggered = [k for k, kws in FREEFORM_TRIGGERS.items() if any(w in prompt.lower() for w in kws)]
+    dbg("context triggers", triggered)
+    ctx = base_context()
+    cwd = ctx["cwd"]
+    return gather_context(triggered, cwd)
+
+# ---------------------------------------------------------------------------
+# Debug
+# ---------------------------------------------------------------------------
+
+def dbg(label: str, value=None) -> None:
+    if not DEBUG:
+        return
+    txt = f"{GRAY}[debug] {label}"
+    if value is not None:
+        txt += f": {value}"
+    print(txt + RESET, flush=True)
+
+# ---------------------------------------------------------------------------
+# Ollama
+# ---------------------------------------------------------------------------
+
+def ask_ollama(prompt: str, system: str, context: str = "") -> str:
+    full_prompt = f"{context}\n\n{prompt}" if context else prompt
+    payload = {"model": MODEL, "system": system, "prompt": full_prompt, "stream": True}
+
+    dbg("POST", ollama_url())
+    dbg("payload", json.dumps(payload, indent=2))
+
+    t0 = time.time()
+    try:
+        response = requests.post(ollama_url(), json=payload, timeout=30, stream=True)
+    except requests.exceptions.ConnectionError:
+        print(f"{RED}[error]{RESET} Cannot connect to Ollama at {ollama_url()}")
+        print("        Is Ollama running? Try: ollama serve")
+        raise
+    except requests.exceptions.Timeout:
+        print(f"{RED}[error]{RESET} Ollama did not respond within 30s — check: ollama ps")
+        raise
+
+    dbg("status", response.status_code)
+    response.raise_for_status()
+
+    reply = ""
+    print(f"{GRAY}", end="", flush=True)
+    for raw_line in response.iter_lines():
+        if not raw_line:
+            continue
+        try:
+            chunk = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        token = chunk.get("response", "")
+        reply += token
+        print(token, end="", flush=True)
+        if chunk.get("done"):
+            elapsed = time.time() - t0
+            print(RESET, flush=True)
+            dbg(f"tokens in={chunk.get('prompt_eval_count')} out={chunk.get('eval_count')} elapsed={elapsed:.2f}s")
+            break
+
+    if not reply:
+        print(f"{RESET}{YELLOW}[warn]{RESET} Ollama returned an empty response.")
+    return reply
+
+
+def list_models() -> None:
+    try:
+        r = requests.get(ollama_tags_url(), timeout=5)
+        r.raise_for_status()
+        models = [m["name"] for m in r.json().get("models", [])]
+        print("Available models:")
+        for m in models:
+            print(f"  {m}")
+    except requests.RequestException as e:
+        print(f"Could not fetch models: {e}")
+
+# ---------------------------------------------------------------------------
+# Command execution
+# ---------------------------------------------------------------------------
+
+def extract_commands(text: str) -> list[str]:
+    match = re.search(r"```(?:bash|sh)?\n(.*?)```", text, re.DOTALL)
+    block = match.group(1) if match else text
+    if not match:
+        dbg("no code block found, using raw text")
+    return [ln.strip() for ln in block.splitlines() if ln.strip() and not ln.startswith("#")]
+
+
+def needs_sudo(stderr: str) -> bool:
+    keywords = ["root privileges", "requires root", "permission denied", "operation not permitted"]
+    return any(k in stderr.lower() for k in keywords)
+
+
+def run_commands(commands: list[str], sudo: bool = False, logfile: Path | None = None) -> tuple[bool, str]:
+    print()
+    all_ok = True
+    last_stderr = ""
+
+    for cmd_str in commands:
+        prefix = ["sudo"] if sudo else []
+        flags  = ["-x", "-c"] if DEBUG else ["-c"]
+        cmd    = prefix + ["bash"] + flags + [cmd_str]
+
+        print(f"{CYAN}${RESET} {cmd_str}")
+        if logfile:
+            logfile.write_text(logfile.read_text() + f"$ {cmd_str}\n" if logfile.exists() else f"$ {cmd_str}\n")
+
+        result = subprocess.run(cmd, text=True, stderr=subprocess.PIPE if not DEBUG else None,
+                                stdout=subprocess.PIPE)
+        stdout_out = result.stdout or ""
+        stderr_out = result.stderr or ""
+
+        if stdout_out:
+            print(stdout_out, end="")
+        if logfile and stdout_out:
+            logfile.write_text(logfile.read_text() + stdout_out)
+
+        if result.returncode != 0:
+            if stderr_out:
+                print(stderr_out, end="")
+            print(f"{RED}[exit {result.returncode}]{RESET}")
+            all_ok = False
+            last_stderr = stderr_out
+        else:
+            print(f"{GREEN}[ok]{RESET}")
+
+    return all_ok, last_stderr
+
+# ---------------------------------------------------------------------------
+# Audit wizard
+# ---------------------------------------------------------------------------
+
+def pick(options: list[str], title: str) -> str | None:
+    print(f"\n{BOLD}{title}{RESET}")
+    for i, opt in enumerate(options, 1):
+        print(f"  {CYAN}{i}.{RESET} {opt}")
+    try:
+        raw = input(f"\n{BOLD}Select [1-{len(options)}] or Enter to cancel:{RESET} ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not raw:
+        return None
+    try:
+        idx = int(raw) - 1
+        if 0 <= idx < len(options):
+            return options[idx]
+    except ValueError:
+        pass
+    print(f"{YELLOW}Invalid selection.{RESET}")
+    return None
+
+
+def run_audit() -> None:
+    categories = list(AUDITS.keys())
+    category = pick(categories, "Audit Category")
+    if not category:
+        return
+
+    subcategories = list(AUDITS[category].keys())
+    subcategory = pick(subcategories, f"{category} → Sub-category")
+    if not subcategory:
+        return
+
+    audit_def = AUDITS[category][subcategory]
+
+    try:
+        target = input(f"\n{BOLD}Target{RESET} (IP, subnet, URL, path, domain): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not target:
+        print(f"{YELLOW}No target specified.{RESET}")
+        return
+
+    print(f"\n{GRAY}Gathering context...{RESET}", flush=True)
+    ctx = gather_context(audit_def["context"])
+    ctx += f"\ntarget: {target}"
+    dbg("audit context", ctx)
+
+    prompt = f"Audit target: {target}\nAudit type: {category} / {subcategory}"
+    system = BASE_SYSTEM_PROMPT + "\n\n" + audit_def["prompt"]
+
+    print(f"{GRAY}Generating audit commands...{RESET}", flush=True)
+    try:
+        reply = ask_ollama(prompt, system=system, context=ctx)
+    except requests.RequestException:
+        return
+
+    commands = extract_commands(reply)
+    if not commands:
+        print(f"{YELLOW}No commands found in response.{RESET}")
+        return
+
+    print(f"\n{BOLD}Audit plan — {category} / {subcategory} → {target}{RESET}")
+    for i, cmd in enumerate(commands, 1):
+        print(f"  {CYAN}{i}.{RESET} {cmd}")
+
+    # Report file
+    ts      = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    slug    = f"{category}-{subcategory}".replace(" ", "_").replace("/", "-")
+    logpath = Path(f"audit_{ts}_{slug}.txt")
+    logpath.write_text(
+        f"# Audit: {category} / {subcategory}\n"
+        f"# Target: {target}\n"
+        f"# Date:   {ts}\n\n"
+    )
+
+    confirm = input(f"\n{BOLD}Run audit?{RESET} Output → {logpath}  [y/N] ").strip().lower()
+    if confirm != "y":
+        print("Skipped.")
+        logpath.unlink(missing_ok=True)
+        return
+
+    success, stderr_out = run_commands(commands, logfile=logpath)
+    if not success and needs_sudo(stderr_out):
+        retry = input(f"\n{YELLOW}Needs root. Retry with sudo?{RESET} [y/N] ").strip().lower()
+        if retry == "y":
+            run_commands(commands, sudo=True, logfile=logpath)
+
+    print(f"\n{GREEN}Audit complete.{RESET} Report saved to {logpath}")
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    global DEBUG, MODEL, OLLAMA_HOST
+
+    parser = argparse.ArgumentParser(description="Local AI shell + security audit via Ollama")
+    parser.add_argument("--debug",       action="store_true",    help="Show request/response details")
+    parser.add_argument("--model",       default=MODEL,           help=f"Ollama model (default: {MODEL})")
+    parser.add_argument("--host",        default=OLLAMA_HOST,     help=f"Ollama host (default: {OLLAMA_HOST})")
+    parser.add_argument("--list-models", action="store_true",     help="List available Ollama models and exit")
+    args = parser.parse_args()
+
+    DEBUG       = args.debug
+    MODEL       = args.model
+    OLLAMA_HOST = args.host
+
+    if args.list_models:
+        list_models()
+        return
+
+    print(f"{BOLD}Local AI shell{RESET} — model: {CYAN}{MODEL}{RESET}  ollama: {CYAN}{OLLAMA_HOST}{RESET}")
+    print(f"{GRAY}Commands: 'exit' to quit  |  '/audit' to start a structured security audit{RESET}\n")
+    if DEBUG:
+        print(f"{GRAY}[debug mode on]{RESET}\n")
+
+    while True:
+        try:
+            prompt = input(f"{BOLD}>>{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not prompt or prompt.lower() == "exit":
+            break
+
+        if prompt.lower() == "/audit":
+            run_audit()
+            print()
+            continue
+
+        print(f"{GRAY}Thinking...{RESET}", flush=True)
+        ctx = freeform_context(prompt)
+        dbg("context", ctx)
+        try:
+            reply = ask_ollama(prompt, system=FREEFORM_SYSTEM_PROMPT, context=ctx)
+        except requests.RequestException:
+            continue
+
+        commands = extract_commands(reply)
+        if not commands:
+            print(f"{YELLOW}No commands found in response.{RESET}")
+            continue
+
+        print(f"\n{BOLD}Proposed commands:{RESET}")
+        for i, cmd in enumerate(commands, 1):
+            print(f"  {CYAN}{i}.{RESET} {cmd}")
+
+        confirm = input(f"\n{BOLD}Run these?{RESET} [y/N] ").strip().lower()
+        if confirm != "y":
+            print("Skipped.")
+            continue
+
+        success, stderr_out = run_commands(commands)
+        if not success and needs_sudo(stderr_out):
+            retry = input(f"\n{YELLOW}Needs root. Retry with sudo?{RESET} [y/N] ").strip().lower()
+            if retry == "y":
+                run_commands(commands, sudo=True)
+        print()
+
+
+if __name__ == "__main__":
+    main()
