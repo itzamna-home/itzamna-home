@@ -536,6 +536,85 @@ def extract_commands(text: str) -> list[str]:
     return [ln.strip() for ln in block.splitlines() if ln.strip() and not ln.startswith("#")]
 
 
+def binary_of(cmd: str) -> str:
+    """Extract the base binary name from a shell command."""
+    # Strip leading sudo/env/nice etc.
+    skip = {"sudo", "env", "nice", "nohup", "time"}
+    parts = cmd.split()
+    for part in parts:
+        if part not in skip and not part.startswith("-") and "=" not in part:
+            return part.split("/")[-1]  # handle full paths
+    return parts[0] if parts else ""
+
+
+def find_binary(name: str) -> str | None:
+    """Return the full path of a binary, or None if not found."""
+    result = subprocess.run(["which", name], capture_output=True, text=True)
+    path = result.stdout.strip()
+    return path if path else None
+
+
+def get_help(binary_path: str) -> str:
+    """Try --help then -h, return up to 3000 chars of output."""
+    for flag in ["--help", "-h"]:
+        r = subprocess.run([binary_path, flag], capture_output=True, text=True, timeout=5)
+        out = (r.stdout + r.stderr).strip()
+        if out:
+            return out[:3000]
+    return ""
+
+
+REFINE_SYSTEM = (
+    "You are a shell command corrector. "
+    "Given a command and the tool's --help output, rewrite the command so it uses "
+    "only valid flags and correct syntax. "
+    "Return ONLY the corrected command as a single line. No explanation. No code block."
+)
+
+
+def refine_command(cmd: str, help_text: str) -> str:
+    """Ask the LLM to fix a command given the tool's help output."""
+    prompt = f"Command to fix:\n{cmd}\n\nTool help output:\n{help_text}"
+    print(f"  {GRAY}refining with help output...{RESET}", flush=True)
+    try:
+        refined = ask_ollama(prompt, system=REFINE_SYSTEM)
+        # ask_ollama streams and prints — move to new line cleanly
+        refined = refined.strip().splitlines()[0].strip()  # take first line only
+        dbg("refined command", refined)
+        return refined
+    except requests.RequestException:
+        return cmd  # fall back to original if LLM call fails
+
+
+def validate_and_refine(commands: list[str]) -> list[str]:
+    """
+    For each command:
+      1. Check the binary exists (whereis/which)
+      2. If found, fetch --help and ask LLM to correct the command
+      3. If not found, warn and drop it
+    Returns the refined list.
+    """
+    refined = []
+    for cmd in commands:
+        binary = binary_of(cmd)
+        if not binary:
+            refined.append(cmd)
+            continue
+
+        path = find_binary(binary)
+        if not path:
+            print(f"  {YELLOW}[not found]{RESET} {binary} — skipping")
+            continue
+
+        print(f"  {GREEN}[found]{RESET} {binary} → {path}")
+        help_text = get_help(path)
+        if help_text:
+            cmd = refine_command(cmd, help_text)
+        refined.append(cmd)
+
+    return refined
+
+
 def needs_sudo(stderr: str) -> bool:
     keywords = ["root privileges", "requires root", "permission denied", "operation not permitted"]
     return any(k in stderr.lower() for k in keywords)
@@ -640,6 +719,12 @@ def run_audit() -> None:
         print(f"{YELLOW}No commands found in response.{RESET}")
         return
 
+    print(f"\n{BOLD}Validating commands...{RESET}")
+    commands = validate_and_refine(commands)
+    if not commands:
+        print(f"{YELLOW}No valid commands after validation.{RESET}")
+        return
+
     print(f"\n{BOLD}Audit plan — {category} / {subcategory} → {target}{RESET}")
     for i, cmd in enumerate(commands, 1):
         print(f"  {CYAN}{i}.{RESET} {cmd}")
@@ -721,6 +806,12 @@ def main():
         commands = extract_commands(reply)
         if not commands:
             print(f"{YELLOW}No commands found in response.{RESET}")
+            continue
+
+        print(f"\n{BOLD}Validating commands...{RESET}")
+        commands = validate_and_refine(commands)
+        if not commands:
+            print(f"{YELLOW}No valid commands after validation.{RESET}")
             continue
 
         print(f"\n{BOLD}Proposed commands:{RESET}")
