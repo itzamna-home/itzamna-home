@@ -547,16 +547,32 @@ def binary_of(cmd: str) -> str:
     return parts[0] if parts else ""
 
 
+def sanitize_tool_name(name: str) -> str:
+    """Strip punctuation and whitespace the LLM may have added."""
+    import re as _re
+    return _re.sub(r"[^a-zA-Z0-9._-]", "", name.strip()).lower()
+
+
 def find_binary(name: str) -> str | None:
-    """Use whereis to find a binary. Returns the first path found or None."""
-    result = subprocess.run(["whereis", "-b", name], capture_output=True, text=True)
-    # whereis output: "nmap: /usr/bin/nmap"
-    parts = result.stdout.strip().split(":", 1)
+    """Try whereis -b first, fall back to which. Returns path or None."""
+    name = sanitize_tool_name(name)
+    if not name:
+        return None
+
+    # whereis -b: "nmap: /usr/bin/nmap /usr/share/nmap ..."
+    r = subprocess.run(["whereis", "-b", name], capture_output=True, text=True)
+    dbg(f"whereis {name}", r.stdout.strip())
+    parts = r.stdout.strip().split(":", 1)
     if len(parts) == 2:
-        paths = parts[1].strip().split()
+        paths = [p for p in parts[1].strip().split() if p.startswith("/") and "." not in p.split("/")[-1]]
         if paths:
             return paths[0]
-    return None
+
+    # fallback: which
+    r2 = subprocess.run(["which", name], capture_output=True, text=True)
+    path = r2.stdout.strip()
+    dbg(f"which {name}", path)
+    return path if path else None
 
 
 def get_help(binary_path: str) -> str:
@@ -728,7 +744,8 @@ def ask_tools(audit_type: str, audit_prompt: str) -> list[str]:
     print(f"{GRAY}Selecting tools...{RESET}", flush=True)
     raw = ask_ollama_silent(prompt, system=TOOLS_SYSTEM)
     dbg("tools raw", raw)
-    return [t.strip().lower() for t in raw.replace("\n", ",").split(",") if t.strip()]
+    names = [sanitize_tool_name(t) for t in raw.replace("\n", ",").split(",")]
+    return [n for n in names if n]
 
 
 def ask_assemble_one(tool: str, help_text: str, target: str, audit_type: str, ctx: str) -> str:
